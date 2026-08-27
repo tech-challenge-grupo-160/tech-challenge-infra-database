@@ -145,8 +145,29 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - name: Terraform init
+      # O banco le a rede pelo state remoto do infra-k8s. Sem
+      # <ambiente>/rede.tfstate no bucket, o terraform_remote_state falha com
+      # "Unable to find remote state" e derruba o plan - e isso acontece em
+      # todo PR enquanto hom e prod nao tiverem rede aplicada.
+      #
+      # Mesma politica dos demais pre-requisitos deste workflow: pular o plan
+      # do ambiente, com aviso, em vez de bloquear o PR por algo que nao tem a
+      # ver com a mudanca proposta.
+      - name: Verifica se a rede do ambiente existe
+        id: rede
         if: steps.check.outputs.exists == 'true'
+        run: |
+          if aws s3api head-object \
+               --bucket "${{ vars.TF_STATE_BUCKET }}" \
+               --key "${{ matrix.env }}/rede.tfstate" >/dev/null 2>&1; then
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rede do ambiente ${{ matrix.env }} ainda nao foi aplicada - plan ignorado. Aplique tech-challenge-infra-k8s primeiro."
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform init
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
@@ -159,7 +180,7 @@ jobs:
       # o PR. Antes tinha continue-on-error porque falharia sempre por falta de
       # credencial - e isso acabava escondendo erro de verdade.
       - name: Terraform plan
-        if: steps.check.outputs.exists == 'true'
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform plan -no-color -input=false \
@@ -167,7 +188,7 @@ jobs:
             > "${GITHUB_WORKSPACE}/plan-${{ matrix.env }}.txt" 2>&1
 
       - name: Comenta o plan no Pull Request
-        if: steps.check.outputs.exists == 'true'
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         uses: actions/github-script@v7
         env:
           MATRIX_ENV: ${{ matrix.env }}
