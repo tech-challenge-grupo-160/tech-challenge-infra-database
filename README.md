@@ -82,3 +82,57 @@ Nenhuma credencial neste repositório. A senha do banco é gerada pelo Terraform
 ## Contribuição
 
 Branch `main` protegida — sem commits diretos. Toda mudança entra por Pull Request com pelo menos uma aprovação.
+
+## Banco de dados
+
+PostgreSQL gerenciado no Amazon RDS, provisionado pelo Terraform na raiz deste
+repositório ([`banco.tf`](banco.tf)). Issue
+[#61](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/61).
+
+| Item | Valor |
+|---|---|
+| Engine | PostgreSQL 16 |
+| Classe | `db.t3.micro` |
+| Alta disponibilidade | Multi-AZ |
+| Backup | automático, 7 dias de retenção |
+| Criptografia em repouso | sim, chave gerenciada pela AWS |
+| Criptografia em trânsito | `rds.force_ssl = 1` no parameter group |
+| Acesso público | não |
+
+### A rede vem do outro repositório
+
+As subnets privadas e o security group do banco são criados no
+[tech-challenge-infra-k8s](https://github.com/tech-challenge-grupo-160/tech-challenge-infra-k8s)
+e lidos aqui pelo state remoto. **Aplicar a rede é pré-requisito** — sem o
+`<ambiente>/rede.tfstate` no bucket, o plan falha ao ler os outputs.
+
+O nome do bucket é montado a partir do id da conta em runtime, não recebido por
+variável: ele contém o número da conta e este repositório é público.
+
+### Quem alcança o banco
+
+Ninguém pela internet. A instância fica em subnet privada, sem rota default, e
+o security group só aceita `5432` de dois lugares:
+
+- `sg_nodes` — os pods da API no cluster
+- `sg_lambda` — a Lambda de autenticação, **quando anexada à VPC**
+
+> ⚠️ A Lambda hoje roda fora da VPC. Anexá-la exige o endpoint de interface do
+> Secrets Manager, senão ela perde o acesso ao segredo do JWT no cold start.
+
+### A credencial
+
+Gerada pelo Terraform e guardada em `tc-grupo160/<ambiente>/banco`, no Secrets
+Manager. Nunca é versionada e nunca aparece em output.
+
+O secret guarda o conjunto completo — host, porta, banco, usuário, senha e uma
+`connectionString` pronta, já com `SSL Mode=Require`. Quem consome lê de lá em
+runtime, do mesmo jeito que a Lambda já faz com a chave do JWT.
+
+### Aplicar
+
+**Actions → Terraform CI → Run workflow**, escolhendo o ambiente. O apply
+também roda ao mergear em `homolog` (aplica `hom`) e em `main` (aplica `prod`).
+
+> A criação leva de 10 a 15 minutos com Multi-AZ. O `terraform apply` fica
+> aguardando a instância ficar disponível.
