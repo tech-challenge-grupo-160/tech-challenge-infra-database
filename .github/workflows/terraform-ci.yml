@@ -145,8 +145,29 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
 
-      - name: Terraform init
+      # O banco le a rede pelo state remoto do infra-k8s. Sem
+      # <ambiente>/rede.tfstate no bucket, o terraform_remote_state falha com
+      # "Unable to find remote state" e derruba o plan - e isso acontece em
+      # todo PR enquanto hom e prod nao tiverem rede aplicada.
+      #
+      # Mesma politica dos demais pre-requisitos deste workflow: pular o plan
+      # do ambiente, com aviso, em vez de bloquear o PR por algo que nao tem a
+      # ver com a mudanca proposta.
+      - name: Verifica se a rede do ambiente existe
+        id: rede
         if: steps.check.outputs.exists == 'true'
+        run: |
+          if aws s3api head-object \
+               --bucket "${{ vars.TF_STATE_BUCKET }}" \
+               --key "${{ matrix.env }}/rede.tfstate" >/dev/null 2>&1; then
+            echo "existe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rede do ambiente ${{ matrix.env }} ainda nao foi aplicada - plan ignorado. Aplique tech-challenge-infra-k8s primeiro."
+            echo "existe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform init
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform init \
@@ -159,7 +180,7 @@ jobs:
       # o PR. Antes tinha continue-on-error porque falharia sempre por falta de
       # credencial - e isso acabava escondendo erro de verdade.
       - name: Terraform plan
-        if: steps.check.outputs.exists == 'true'
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         working-directory: ${{ env.TF_DIR }}
         run: |
           terraform plan -no-color -input=false \
@@ -167,7 +188,7 @@ jobs:
             > "${GITHUB_WORKSPACE}/plan-${{ matrix.env }}.txt" 2>&1
 
       - name: Comenta o plan no Pull Request
-        if: steps.check.outputs.exists == 'true'
+        if: steps.check.outputs.exists == 'true' && steps.rede.outputs.existe == 'true'
         uses: actions/github-script@v7
         env:
           MATRIX_ENV: ${{ matrix.env }}
@@ -213,13 +234,18 @@ jobs:
     name: Apply
     runs-on: ubuntu-latest
     needs: validate
-    # Por push, so a partir das branches de ambiente: homolog aplica hom e main
-    # aplica prod. Por workflow_dispatch, qualquer branch aplica o ambiente
-    # escolhido no input - e como se aplica dev sem promover branch.
+    # Cada branch aplica o seu ambiente: develop aplica dev, homolog aplica hom
+    # e main aplica prod. Por workflow_dispatch, qualquer branch aplica o
+    # ambiente escolhido no input.
+    #
+    # develop aplicando dev e mudanca deliberada: o ambiente de desenvolvimento
+    # passa a acompanhar a branch sem ninguem precisar lembrar de disparar o
+    # workflow. O preco e que todo merge em develop toca a AWS - o plan do PR
+    # continua sendo o momento de revisar o que vai acontecer.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'main'))
-    environment: ${{ fromJSON('{"dev":"desenvolvimento","hom":"homologacao","prod":"producao"}')[github.event_name == 'workflow_dispatch' && inputs.ambiente || (github.ref_name == 'main' && 'prod' || 'hom')] }}
+      (github.event_name == 'push' && (github.ref_name == 'develop' || github.ref_name == 'homolog' || github.ref_name == 'main'))
+    environment: ${{ fromJSON('{"dev":"desenvolvimento","hom":"homologacao","prod":"producao"}')[github.event_name == 'workflow_dispatch' && inputs.ambiente || (github.ref_name == 'main' && 'prod' || (github.ref_name == 'homolog' && 'hom' || 'dev'))] }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -259,7 +285,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENV="${{ inputs.ambiente }}"
           else
-            ENV="hom"; [ "${{ github.ref_name }}" = "main" ] && ENV="prod"
+            case "${{ github.ref_name }}" in
+              main)    ENV="prod" ;;
+              homolog) ENV="hom" ;;
+              *)       ENV="dev" ;;
+            esac
           fi
           echo "env=$ENV" >> "$GITHUB_OUTPUT"
           echo "Aplicando o ambiente: $ENV  (branch: ${{ github.ref_name }})"
