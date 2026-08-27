@@ -136,3 +136,38 @@ também roda ao mergear em `homolog` (aplica `hom`) e em `main` (aplica `prod`).
 
 > A criação leva de 10 a 15 minutos com Multi-AZ. O `terraform apply` fica
 > aguardando a instância ficar disponível.
+
+### Acesso externo temporário (só `dev`)
+
+O schema é criado pelo `MigrateAndSeedAsync` no startup da API, que só sobe no
+cluster ([#60](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/60)).
+Com o banco privado não há de onde rodar as migrations enquanto o cluster não
+existir, e a [#62](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/62)
+fica bloqueada.
+
+Para destravar, `acesso_externo_dev` expõe a instância restrita a CIDRs
+específicos:
+
+```hcl
+acesso_externo_dev   = true
+cidrs_acesso_externo = ["SEU.IP.AQUI/32"]
+```
+
+**Não é economia de custo.** O endpoint do Secrets Manager continua necessário,
+porque a Lambda segue dentro da VPC. O que isso compra é tempo — carregar o
+schema hoje em vez de esperar o cluster.
+
+Três proteções, todas verificadas:
+
+| Tentativa | Resultado |
+|---|---|
+| Ligar em `hom` ou `prod` | recusado — o banco fica privado onde é avaliado |
+| Ligar sem informar CIDR | recusado |
+| Informar `0.0.0.0/0` | recusado — seria um PostgreSQL aberto para a internet |
+
+> ⚠️ Ligar **move a instância para as subnets públicas**, o que a substitui — e
+> substituir apaga os dados. Carregue o schema, desligue o flag e aplique de
+> novo antes de popular qualquer coisa que importe.
+
+O output `acesso_externo` diz se está ligado. Deve ser `false` em `hom` e `prod`
+sempre, e em `dev` fora da janela de carga.

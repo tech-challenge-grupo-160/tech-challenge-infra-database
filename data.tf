@@ -24,6 +24,14 @@ data "terraform_remote_state" "rede" {
 locals {
   nome = "${var.project}-${var.ambiente}"
 
+  vpc_id           = data.terraform_remote_state.rede.outputs.vpc_id
   subnets_privadas = data.terraform_remote_state.rede.outputs.subnets_privadas
+  subnets_publicas = data.terraform_remote_state.rede.outputs.subnets_publicas
   sg_banco         = data.terraform_remote_state.rede.outputs.sg_banco
+
+  # As subnets privadas nao tem rota para internet gateway, e o RDS so aceita
+  # publicly_accessible em subnet que tenha. Ligar o acesso externo obriga a
+  # mover a instancia - o que a substitui. E o preco de destravar a issue #62
+  # antes do cluster existir.
+  subnets_banco = var.acesso_externo_dev ? local.subnets_publicas : local.subnets_privadas
 }

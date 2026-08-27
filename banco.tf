@@ -7,7 +7,7 @@
 resource "aws_db_subnet_group" "principal" {
   name        = local.nome
   description = "Subnets privadas do PostgreSQL gerenciado"
-  subnet_ids  = local.subnets_privadas
+  subnet_ids  = local.subnets_banco
 
   tags = { Name = local.nome }
 }
@@ -97,12 +97,13 @@ resource "aws_db_instance" "principal" {
   storage_encrypted = true
 
   db_subnet_group_name   = aws_db_subnet_group.principal.name
-  vpc_security_group_ids = [local.sg_banco]
+  vpc_security_group_ids = concat([local.sg_banco], aws_security_group.acesso_externo[*].id)
   parameter_group_name   = aws_db_parameter_group.principal.name
 
-  # Sem acesso publico. Combinado com as subnets privadas - que nao tem rota
-  # para a internet - o banco so e alcancavel de dentro da VPC.
-  publicly_accessible = false
+  # Sem acesso publico por padrao. Combinado com as subnets privadas - que nao
+  # tem rota para a internet - o banco so e alcancavel de dentro da VPC.
+  # Ver acesso_externo_dev: ligado, move a instancia para as subnets publicas.
+  publicly_accessible = var.acesso_externo_dev
 
   multi_az = var.multi_az
 
@@ -120,4 +121,31 @@ resource "aws_db_instance" "principal" {
   apply_immediately          = true
 
   tags = { Name = local.nome }
+}
+
+# ------------------------------------------------- acesso externo temporario
+#
+# So existe com acesso_externo_dev ligado, e a variavel so aceita ser ligada em
+# dev. Security group proprio em vez de regra no sg_banco: aquele pertence ao
+# state do infra-k8s, e mexer nele daqui deixaria os dois disputando o recurso.
+
+resource "aws_security_group" "acesso_externo" {
+  count = var.acesso_externo_dev ? 1 : 0
+
+  name        = "${local.nome}-banco-externo"
+  description = "Acesso temporario ao banco para carga de schema. Ver issue #62."
+  vpc_id      = local.vpc_id
+
+  tags = { Name = "${local.nome}-banco-externo" }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "acesso_externo" {
+  for_each = var.acesso_externo_dev ? toset(var.cidrs_acesso_externo) : toset([])
+
+  security_group_id = aws_security_group.acesso_externo[0].id
+  description       = "PostgreSQL a partir de ${each.value}"
+  cidr_ipv4         = each.value
+  from_port         = 5432
+  to_port           = 5432
+  ip_protocol       = "tcp"
 }

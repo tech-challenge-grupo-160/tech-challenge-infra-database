@@ -71,3 +71,43 @@ variable "usuario_master" {
   type        = string
   default     = "oficina_admin"
 }
+
+variable "acesso_externo_dev" {
+  description = <<-EOT
+    Expoe o banco fora da VPC, restrito aos CIDRs de cidrs_acesso_externo.
+
+    Existe por um motivo especifico: o schema e criado pelo MigrateAndSeedAsync
+    no startup da API, que so sobe no cluster (issue #60). Com o banco privado
+    nao ha de onde rodar as migrations enquanto o cluster nao existir, e a
+    issue #62 fica bloqueada.
+
+    Nao e otimizacao de custo. O endpoint do Secrets Manager continua
+    necessario, porque a Lambda segue dentro da VPC.
+
+    Ligar move a instancia para as subnets publicas, o que **substitui** a
+    instancia. Desligue assim que o schema estiver carregado.
+  EOT
+  type        = bool
+  default     = false
+
+  validation {
+    condition     = !var.acesso_externo_dev || var.ambiente == "dev"
+    error_message = "acesso_externo_dev so pode ser ligado em dev. Em hom e prod o banco fica privado, como exige a issue #61."
+  }
+}
+
+variable "cidrs_acesso_externo" {
+  description = "CIDRs autorizados quando acesso_externo_dev estiver ligado. Use o IP de quem vai rodar as migrations, com /32."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = !var.acesso_externo_dev || length(var.cidrs_acesso_externo) > 0
+    error_message = "Com acesso_externo_dev ligado, informe ao menos um CIDR em cidrs_acesso_externo."
+  }
+
+  validation {
+    condition     = !contains(var.cidrs_acesso_externo, "0.0.0.0/0")
+    error_message = "0.0.0.0/0 nao e aceito: seria um PostgreSQL aberto para a internet, protegido apenas pela senha. Use o IP de quem precisa, com /32."
+  }
+}

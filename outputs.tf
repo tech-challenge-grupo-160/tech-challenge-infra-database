@@ -24,3 +24,8 @@ output "multi_az" {
   description = "Se a instancia esta em duas zonas de disponibilidade."
   value       = aws_db_instance.principal.multi_az
 }
+
+output "acesso_externo" {
+  description = "Se o banco esta exposto fora da VPC. Deve ser falso em hom e prod, e falso em dev fora da janela de carga do schema."
+  value       = var.acesso_externo_dev
+}
