@@ -67,9 +67,14 @@ resource "aws_db_parameter_group" "principal" {
 
   # Sem isto o banco aceita conexao em texto claro. E o que atende ao criterio
   # de criptografia em transito da issue #61.
+  #
+  # apply_method explicito porque a AWS devolve pending-reboot para este
+  # parametro. Com o default (immediate), todo plan mostrava o parameter group
+  # "updated in-place" sem nada ter mudado - e mudanca de verdade some no ruido.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   lifecycle {
