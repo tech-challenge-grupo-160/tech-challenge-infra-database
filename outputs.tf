@@ -29,3 +29,20 @@ output "acesso_externo" {
   description = "Se o banco esta exposto fora da VPC. Deve ser falso em hom e prod, e falso em dev fora da janela de carga do schema."
   value       = var.acesso_externo_dev
 }
+
+# ---------------------------------------------------------- banco da Execucao
+
+output "execucao_endpoint" {
+  description = "Endereco do banco da Execucao. Alcancavel apenas de dentro da VPC."
+  value       = aws_db_instance.execucao.address
+}
+
+output "execucao_secret_credencial" {
+  description = "Nome do secret com a connection string da Execucao. Consumido pela pipeline da Execucao - nunca o valor."
+  value       = aws_secretsmanager_secret.execucao.name
+}
+
+output "execucao_multi_az" {
+  description = "Se o banco da Execucao esta em duas zonas de disponibilidade."
+  value       = aws_db_instance.execucao.multi_az
+}
