@@ -10,3 +10,6 @@ multi_az = true
 
 # Backup automatico com uma semana de retencao.
 backup_retention_period = 7
+
+# Banco da Execucao (F4-12): Multi-AZ so em producao.
+execucao_multi_az = true
