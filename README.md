@@ -1,46 +1,62 @@
 # tech-challenge-infra-database
 
-Infraestrutura como código do banco de dados gerenciado — Tech Challenge SOAT, Fase 3.
+Infraestrutura como código dos bancos relacionais gerenciados — Tech Challenge SOAT, Fases 3 e 4.
 
 ## Propósito
 
-Provisiona, via Terraform, o banco de dados gerenciado que substitui o PostgreSQL que rodava como deployment dentro do cluster na Fase 2.
+Provisiona, via Terraform, os dois PostgreSQL no Amazon RDS:
+
+| Instância | Dono | Disponibilidade | Arquivo |
+|---|---|---|---|
+| `tc-grupo160-<ambiente>` | OS Service | Multi-AZ nos três ambientes | [`banco.tf`](banco.tf) |
+| `tc-grupo160-<ambiente>-execucao` | Execução (F4-12) | Single-AZ em `dev` e `hom`, Multi-AZ em `prod` | [`execucao.tf`](execucao.tf) |
+
+Um banco por serviço, pela ADR de banco por serviço (F4-04). O Billing usa
+DynamoDB, que não fica aqui (F4-13).
 
 Responsabilidades deste repositório:
 
-- Instância gerenciada em subnet privada, sem acesso público
-- Alta disponibilidade e backup automatizado
-- Credenciais no gerenciador de segredos da nuvem
+- Instâncias gerenciadas em subnet privada, sem acesso público
+- Backup automatizado e alta disponibilidade onde ela é avaliada
+- Uma credencial por banco no Secrets Manager
 - Criptografia em repouso e em trânsito
 - Parametrização por ambiente (`dev`, `hom`, `prod`)
 
-A rede e o cluster ficam em [tech-challenge-infra-k8s](https://github.com/tech-challenge-grupo-160/tech-challenge-infra-k8s). O schema e as migrations pertencem à [aplicação principal](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica).
+A rede e o cluster ficam em [tech-challenge-infra-k8s](https://github.com/tech-challenge-grupo-160/tech-challenge-infra-k8s). O schema e as migrations pertencem a cada serviço: o do OS à [aplicação principal](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica), o da Execução ao [repositório dela](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica-execucao).
 
 ## Status
 
-> ⚠️ **Scaffold.** O provedor de nuvem ainda não foi decidido — depende da RFC [#56](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/56). A justificativa formal da escolha do banco é a issue [#76](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/76).
+As duas instâncias sobem e descem com o ambiente, pelos scripts do repositório
+principal. O ciclo completo foi validado em `dev` em 09/11/2026.
+
+> **Subir e derrubar o ambiente inteiro** é com os scripts do repositório
+> principal — ver o
+> [roteiro rápido](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/blob/develop/docs/CICLO-DE-VIDA.md#roteiro-rápido).
+> O banco é a etapa 4 do `sobe-tudo.sh` e o passo 3 do `derruba-tudo.sh`.
 
 ## Tecnologias
 
 | Item | Definição |
 |---|---|
 | IaC | Terraform |
-| Banco | PostgreSQL (versão a confirmar na justificativa formal) |
-| Nuvem | A definir — RFC [#56](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/56) |
-| State | Backend remoto com lock ([issue #57](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/57)) |
+| Banco | PostgreSQL 16 no Amazon RDS |
+| Nuvem | AWS, região `us-east-1` — [RFC-0001](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/blob/develop/docs/rfcs/0001-escolha-da-nuvem.md) |
+| State | S3 `tc-grupo160-tfstate-<id-da-conta>` com lock na tabela `tc-grupo160-tflock` |
 
-## Estrutura prevista
+## Estrutura
 
 ```text
 .
-├── main.tf                    # Instância gerenciada, subnet group, parameter group
+├── banco.tf                   # RDS do OS Service, subnet group, parameter group e credencial
+├── execucao.tf                # RDS da Execucao e credencial, reaproveitando subnet group e parameter group
+├── data.tf                    # state remoto da rede (infra-k8s)
 ├── variables.tf
-├── outputs.tf                 # Endpoint e ARN do segredo (sem expor credencial)
+├── outputs.tf                 # endpoints e ARNs dos segredos (sem expor credencial)
 ├── versions.tf
 └── inventories/
     ├── dev/terraform.tfvars
     ├── hom/terraform.tfvars
-    └── prod/terraform.tfvars
+    └── prod/terraform.tfvars  # execucao_multi_az = true
 ```
 
 Mesma convenção de `inventories/` já usada no repositório de infraestrutura Kubernetes.
@@ -52,7 +68,8 @@ terraform init
 terraform plan -var-file=inventories/dev/terraform.tfvars
 ```
 
-O `apply` roda pelo pipeline, não manualmente — ver seção abaixo.
+O `apply` roda pelo pipeline ou pelo `sobe-tudo.sh`, não manualmente — ver
+seção abaixo.
 
 ## Deploy
 
@@ -60,11 +77,20 @@ Pipeline em GitHub Actions ([issue #51](https://github.com/tech-challenge-grupo-
 
 | Evento | Ação |
 |---|---|
-| Pull Request | `fmt`, `validate` e `plan` publicado como comentário no PR |
+| Pull Request | `fmt`, `validate` e `plan` dos três ambientes |
+| Merge em `develop` | `apply` em `dev` |
 | Merge em `homolog` | `apply` no ambiente de homologação |
 | Merge em `main` | `apply` no ambiente de produção |
 
-Autenticação na nuvem por OIDC ([issue #54](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica/issues/54)) — sem credencial estática em secrets.
+A autenticação na AWS usa as credenciais temporárias do Learner Lab, guardadas
+nos secrets do repositório e renovadas a cada sessão pelo `renova-secrets.sh`
+do repositório principal. O lab não permite criar o provedor OIDC.
+
+> **Com o ambiente derrubado, o plan de `dev` e `hom` falha em todo PR.** O state
+> da rede continua no bucket, mas vazio, e o banco não acha os outputs. Não é
+> problema da mudança. Para mergear nesse estado sem disparar um apply que vai
+> falhar, pause o workflow (`gh workflow disable terraform-ci.yml`), mergeie e
+> reative.
 
 ## Segurança
 
@@ -78,6 +104,8 @@ Nenhuma credencial neste repositório. A senha do banco é gerada pelo Terraform
 | [tech-challenge-lambda-auth](https://github.com/tech-challenge-grupo-160/tech-challenge-lambda-auth) | Function serverless de autenticação |
 | [tech-challenge-infra-k8s](https://github.com/tech-challenge-grupo-160/tech-challenge-infra-k8s) | Terraform do cluster Kubernetes |
 | [tech-challenge-infra-database](https://github.com/tech-challenge-grupo-160/tech-challenge-infra-database) | Este repositório |
+| [tech-challenge-oficina-mecanica-billing](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica-billing) | Billing Service (orçamento e pagamento) |
+| [tech-challenge-oficina-mecanica-execucao](https://github.com/tech-challenge-grupo-160/tech-challenge-oficina-mecanica-execucao) | Execução Service (diagnóstico, estoque e reparo) |
 
 ## Contribuição
 
@@ -111,19 +139,26 @@ variável: ele contém o número da conta e este repositório é público.
 
 ### Quem alcança o banco
 
-Ninguém pela internet. A instância fica em subnet privada, sem rota default, e
-o security group só aceita `5432` de dois lugares:
+Ninguém pela internet. As duas instâncias ficam em subnet privada, sem rota
+default, e compartilham o security group do banco, que só aceita `5432` de dois
+lugares:
 
-- `sg_nodes` — os pods da API no cluster
-- `sg_lambda` — a Lambda de autenticação, **quando anexada à VPC**
+- `sg_nodes` — os pods no cluster
+- `sg_lambda` — a Lambda de autenticação, que roda dentro da VPC e lê o segredo
+  do JWT pelo endpoint de interface do Secrets Manager
 
-> ⚠️ A Lambda hoje roda fora da VPC. Anexá-la exige o endpoint de interface do
-> Secrets Manager, senão ela perde o acesso ao segredo do JWT no cold start.
+O que separa um banco do outro é a credencial: cada serviço só recebe a do seu.
 
 ### A credencial
 
-Gerada pelo Terraform e guardada em `tc-grupo160/<ambiente>/banco`, no Secrets
-Manager. Nunca é versionada e nunca aparece em output.
+Gerada pelo Terraform, uma por instância, no Secrets Manager:
+
+| Segredo | Quem recebe |
+|---|---|
+| `tc-grupo160/<ambiente>/banco` | OS Service e a Lambda de autenticação |
+| `tc-grupo160/<ambiente>/execucao/banco` | só a Execução, pelo deploy dela |
+
+Nunca são versionadas e nunca aparecem em output.
 
 O secret guarda o conjunto completo — host, porta, banco, usuário, senha e uma
 `connectionString` pronta, já com `SSL Mode=Require`. Quem consome lê de lá em
@@ -132,10 +167,13 @@ runtime, do mesmo jeito que a Lambda já faz com a chave do JWT.
 ### Aplicar
 
 **Actions → Terraform CI → Run workflow**, escolhendo o ambiente. O apply
-também roda ao mergear em `homolog` (aplica `hom`) e em `main` (aplica `prod`).
+também roda ao mergear em `develop` (aplica `dev`), em `homolog` (aplica `hom`)
+e em `main` (aplica `prod`). No ciclo completo, quem aplica é o `sobe-tudo.sh`,
+na etapa 4.
 
-> A criação leva de 10 a 15 minutos com Multi-AZ. O `terraform apply` fica
-> aguardando a instância ficar disponível.
+> A criação leva de 10 a 15 minutos com Multi-AZ. As duas instâncias nascem em
+> paralelo, no mesmo apply, e o `terraform apply` fica aguardando as duas ficarem
+> disponíveis.
 
 ### Acesso externo temporário (só `dev`)
 
