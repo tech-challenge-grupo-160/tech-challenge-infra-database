@@ -111,3 +111,23 @@ variable "cidrs_acesso_externo" {
     error_message = "0.0.0.0/0 nao e aceito: seria um PostgreSQL aberto para a internet, protegido apenas pela senha. Use o IP de quem precisa, com /32."
   }
 }
+
+# ---------------------------------------------------------- banco da Execucao
+
+variable "execucao_multi_az" {
+  description = "Multi-AZ no banco da Execucao. A F4-12 pede Single-AZ em dev e hom e Multi-AZ so em prod."
+  type        = bool
+  default     = false
+}
+
+variable "execucao_nome_banco" {
+  description = "Nome do banco da Execucao. Igual ao do appsettings do servico."
+  type        = string
+  default     = "oficina_execucao"
+}
+
+variable "execucao_usuario" {
+  description = "Usuario master do banco da Execucao. Diferente do usuario do OS Service."
+  type        = string
+  default     = "execucao_admin"
+}
